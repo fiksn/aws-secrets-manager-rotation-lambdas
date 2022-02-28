@@ -25,6 +25,8 @@ def lambda_handler(event, context):
     {
         'engine': <required: must be set to 'mongo'>,
         'host': <required: instance host name>,
+        'privileged_username': <optional privileged username>,
+        'privileged_password': <optional privileges password>,
         'username': <required: username>,
         'password': <required: password>,
         'dbname': <optional: database name>,
@@ -237,10 +239,10 @@ def test_secret(service_client, arn, token):
     if conn:
         # This is where the lambda will validate the user's permissions. Modify the below lines to
         # tailor these validations to your needs
-        try:
-            conn.command('usersInfo', pending_dict['username'])
-        finally:
-            conn.logout()
+        #try:
+        #    conn.admin.command('ping')
+        #finally:
+        conn.logout()
 
         logger.info("testSecret: Successfully signed into MongoDB with AWSPENDING secret in %s." % arn)
         return
@@ -282,7 +284,7 @@ def finish_secret(service_client, arn, token):
     logger.info("finishSecret: Successfully set AWSCURRENT stage to version %s for secret %s." % (token, arn))
 
 
-def get_connection(secret_dict):
+def get_connection(secret_dict, use_privileged=False):
     """Gets a connection to MongoDB from a secret dictionary
 
     This helper function uses connectivity information from the secret dictionary to initiate
@@ -307,11 +309,11 @@ def get_connection(secret_dict):
     use_ssl, fall_back = get_ssl_config(secret_dict)
 
     # if an 'ssl' key is not found or does not contain a valid value, attempt an SSL connection and fall back to non-SSL on failure
-    conn = connect_and_authenticate(secret_dict, port, dbname, use_ssl)
+    conn = connect_and_authenticate(secret_dict, port, dbname, use_ssl, use_privileged)
     if conn or not fall_back:
         return conn
     else:
-        return connect_and_authenticate(secret_dict, port, dbname, False)
+        return connect_and_authenticate(secret_dict, port, dbname, False, use_privileged)
 
 
 def get_ssl_config(secret_dict):
@@ -356,7 +358,7 @@ def get_ssl_config(secret_dict):
     return True, True
 
 
-def connect_and_authenticate(secret_dict, port, dbname, use_ssl):
+def connect_and_authenticate(secret_dict, port, dbname, use_ssl, use_privileged=False):
     """Attempt to connect and authenticate to a MongoDB instance
 
     This helper function tries to connect to the database using connectivity info passed in.
@@ -367,6 +369,7 @@ def connect_and_authenticate(secret_dict, port, dbname, use_ssl):
         - port (int): The databse port to connect to
         - dbname (str): Name of the database
         - use_ssl (bool): Flag indicating whether connection should use SSL/TLS
+        - use_privileged (bool): Flag to indicate whether privileged account should be used
 
     Returns:
         Connection: The pymongo.database.Database object if successful. None otherwise
@@ -380,8 +383,13 @@ def connect_and_authenticate(secret_dict, port, dbname, use_ssl):
         # Hostname verfification and server certificate validation enabled by default when ssl=True
         client = MongoClient(host=secret_dict['host'], port=port, connectTimeoutMS=5000, serverSelectionTimeoutMS=5000, ssl=use_ssl)
         db = client[dbname]
-        db.authenticate(secret_dict['username'], secret_dict['password'])
-        logger.info("Successfully established %s connection as user '%s' with host: '%s'" % ("SSL/TLS" if use_ssl else "non SSL/TLS", secret_dict['username'], secret_dict['host']))
+        if use_privileged and 'username_privileged' in secret_dict:
+            db.authenticate(secret_dict['username_privileged'], secret_dict['password_privileged'])
+            logger.info("Successfully established %s connection as user '%s' with host: '%s'" % ("SSL/TLS" if use_ssl else "non SSL/TLS", secret_dict['username_privileged'], secret_dict['host']))
+        else
+            db.authenticate(secret_dict['username'], secret_dict['password'])
+            logger.info("Successfully established %s connection as user '%s' with host: '%s'" % ("SSL/TLS" if use_ssl else "non SSL/TLS", secret_dict['username'], secret_dict['host']))
+
         return db
     except errors.PyMongoError as e:
         if 'SSL handshake failed' in e.args[0]:
